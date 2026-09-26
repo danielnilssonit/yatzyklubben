@@ -1687,6 +1687,8 @@ const Scene = (() => {
 // och spelas sedan upp. Värdena bestäms av reglerna (värden i ett onlinespel): när kastet är uträknat vet vi vilken
 // sida som hamnar uppåt på varje tärning, och tärningens bild vrids (en av kubens 24 vridningar) så att rätt värde
 // hamnar där. Då ser kastet naturligt ut och landar ändå på rätt tal.
+// Tärningarna ligger synliga i bägaren: de hoppar in, skramlar när bägaren skakas och glider mot öppningen när den
+// vänds. Kastet börjar exakt där de ligger i bägaren, så att inget hoppar till.
 // Efter kastet ställer sig tärningarna i en rad mitt på filten (sorterade), och sparade tärningar hoppar över
 // avdelaren till läderhyllan närmast spelaren.
 const Dice = (() => {
@@ -1785,6 +1787,8 @@ const Dice = (() => {
       setCup(CUP_REST.p, CUP_REST.r);
     }
     ready = true;
+    dice.forEach(d => { d.slot = d.i; });
+    cupFollow();
     Bus.on('frame', tick);
   };
   D.ready = () => ready;
@@ -1827,18 +1831,28 @@ const Dice = (() => {
     const sl = slots(values, held);
     dice.forEach(d => {
       d.v = values[d.i];
-      if (!rolled || !values[d.i]) { d.zone = 'cup'; d.g.visible = false; return; }
+      if (!rolled || !values[d.i]) { d.zone = 'cup'; d.slot = d.i; d.flying = false; d.g.scale.setScalar(1); return; }
       d.zone = held[d.i] ? 'held' : 'row';
       d.g.visible = true;
       d.g.position.copy(sl[d.i]);
       d.g.quaternion.copy(uprightQ(d.v, jitter(d.i)));
       d.g.scale.setScalar(1);
     });
+    if (!rolled) { cupSlide = 0; cupJig = 0; if (cup) setCup(CUP_REST.p, CUP_REST.r); }
+    cupFollow();
     D.tip(null);
     syncExtras();
     Scene.dirty();
   };
-  D.hide = () => { if (!ready) return; anims.clear(); dice.forEach(d => { d.zone = 'cup'; d.g.visible = false; }); D.tip(null); syncExtras(); if (cup) setCup(CUP_REST.p, CUP_REST.r); Scene.dirty(); };
+  D.hide = () => {
+    if (!ready) return;
+    anims.clear();
+    cupSlide = 0; cupJig = 0;
+    if (cup) setCup(CUP_REST.p, CUP_REST.r);
+    dice.forEach(d => { d.zone = 'cup'; d.slot = d.i; d.flying = false; d.g.scale.setScalar(1); });
+    cupFollow();
+    D.tip(null); syncExtras(); Scene.dirty();
+  };
   D.values = () => dice.map(d => d.v);
   D.zones = () => dice.map(d => d.zone);
 
@@ -1879,6 +1893,8 @@ const Dice = (() => {
       if (done) { anims.delete(a); a.res(); }
     }
     t0 += dt;
+    if (cupJig > 0) jigT += dt * (1 / Math.max(.05, Time.speed()));
+    cupFollow();
     // ringarna pulserar
     dice.forEach(d => {
       if (d.halo.visible) d.halo.material.opacity = .55 + .12 * Math.sin(t0 * 3 + d.i);
@@ -1948,14 +1964,65 @@ const Dice = (() => {
     });
   };
 
+  /* ---------- Tärningarna i bägaren ---------- */
+  // Platser i bägarens eget rum (före skalningen 0,8; tärningens halva kant är där 0,625): tre på botten och två
+  // ovanpå när bägaren står, och nära öppningen (mot den nedre väggen, lokal -X) när den är vänd.
+  const IN_REST = [[0, 1.08, .8], [-.69, 1.08, -.4], [.69, 1.08, -.4], [-.62, 2.34, .1], [.62, 2.34, -.1]];
+  const IN_MOUTH = [[-.85, 3.95, .68], [-.85, 3.95, -.68], [.35, 2.75, -.45], [-.95, 2.65, 0], [.45, 4.05, 0]];
+  const SLOT_Q = [0, 1, 2, 3, 4].map(k => new THREE.Quaternion().setFromEuler(new THREE.Euler(k * 1.31 + .4, k * 2.13 + .9, k * .71 + .2)));
+  let cupSlide = 0, cupJig = 0, jigT = 0;
+  const lp = new THREE.Vector3(), wob = new THREE.Quaternion(), CM = new THREE.Matrix4(), CS = new THREE.Vector3();
+  // tärningens läge och vridning i bägaren (pose: ett planerat läge för bägaren, annars den riktiga). withRq: med bildvridningen.
+  function cupPose(d, outP, outQ, slide = cupSlide, jig = cupJig, pose = null, withRq = true) {
+    const a = IN_REST[d.slot], b = IN_MOUTH[d.slot], s0 = easeInOut(clamp(slide, 0, 1));
+    lp.set(lerp(a[0], b[0], s0), lerp(a[1], b[1], s0), lerp(a[2], b[2], s0));
+    const ph = d.i * 1.7;
+    if (jig > 0) { lp.x += Math.sin(jigT * 31 + ph) * .2 * jig; lp.y += Math.abs(Math.sin(jigT * 38 + ph)) * .34 * jig; lp.z += Math.cos(jigT * 27 + ph * 1.3) * .2 * jig; }
+    const pos = pose ? pose.p : cup.position, quat = pose ? pose.q : cup.quaternion;
+    CM.compose(pos, quat, CS.setScalar(CUP_SCALE));
+    outP.copy(lp).applyMatrix4(CM);
+    outQ.copy(quat).multiply(SLOT_Q[d.slot]);
+    if (jig > 0) { wob.setFromEuler(new THREE.Euler(Math.sin(jigT * 23 + ph) * .5 * jig, Math.cos(jigT * 19 + ph) * .5 * jig, Math.sin(jigT * 29 + ph * .7) * .5 * jig)); outQ.multiply(wob); }
+    if (withRq && d.rq) outQ.multiply(d.rq);
+  }
+  // tärningarna som ligger i bägaren följer med den (utan bägare syns de inte)
+  function cupFollow() {
+    dice.forEach(d => {
+      if (d.zone !== 'cup' || d.flying) return;
+      if (!cup) { d.g.visible = false; return; }
+      d.g.visible = true;
+      cupPose(d, d.g.position, d.g.quaternion);
+    });
+  }
+
   /* ---------- Bägaren ---------- */
   const CUP_REST = {p: new THREE.Vector3(9.3, T.tableY, -.9), r: new THREE.Euler(0, .6, 0)};
   const CUP_SCALE = .8;
-  const CUP_LIFT = {p: new THREE.Vector3(3.2, 1.75, -3.3), r: new THREE.Euler(.16, .6, .1)};
-  const POUR_ANGLE = 1.95;     // ca 112° runt z: öppningen pekar snett ner åt vänster
+  const CUP_LIFT = {p: new THREE.Vector3(3.0, 1.85, -3.2), r: new THREE.Euler(.16, .6, .1)};
+  // vänd: ca 140° runt z, öppningen snett nedåt åt vänster strax ovanför filten (tärningarna faller ut)
+  const CUP_RELEASE = {p: new THREE.Vector3(3.65, 5.05, -3.2), r: new THREE.Euler(.05, .3, 2.45)};
+  const CUP_AFTER = {p: new THREE.Vector3(4.2, 5.6, -3.2), r: new THREE.Euler(.04, .3, 2.72)};
+  // på väg tillbaka: först upp och åt höger (inte lågt över tärningarna), sedan ner på bordet
+  const CUP_AWAY = {p: new THREE.Vector3(7.6, 4.8, -1.8), r: new THREE.Euler(.1, .5, .35)};
+  const RELEASE_POSE = {p: CUP_RELEASE.p, q: new THREE.Quaternion().setFromEuler(CUP_RELEASE.r)};
   function setCup(p, r) { if (!cup) return; cup.position.copy(p); cup.rotation.copy(r); }
   // öppningens mitt i världen för bägarens läge
   function mouth() { return cup ? tmp.set(0, 4.75 * CUP_SCALE, 0).applyQuaternion(cup.quaternion).add(cup.position) : tmp.set(6.5, 4.5, -3); }
+  // bägaren rör sig och tärningarna i den glider (slide mot slide1) mot öppningen
+  function cupSlideTo(p1, r1, dur, slide1, ease = easeInOut) {
+    if (!cup) return Promise.resolve();
+    const p0 = cup.position.clone(), q0 = cup.quaternion.clone(), q1 = new THREE.Quaternion().setFromEuler(r1), s0 = cupSlide;
+    let t = 0;
+    return run(dt => {
+      t += dt;
+      const k = clamp(t / dur, 0, 1), e = ease(k);
+      cup.position.lerpVectors(p0, p1, e);
+      cup.quaternion.copy(q0).slerp(q1, e);
+      cupSlide = lerp(s0, slide1, clamp(k * 1.15, 0, 1));
+      cupFollow();
+      return k >= 1;
+    });
+  }
   function cupTo(p1, r1, dur, ease = easeInOut) {
     if (!cup) return Promise.resolve();
     const p0 = cup.position.clone(), q0 = cup.quaternion.clone(), q1 = new THREE.Quaternion().setFromEuler(r1);
@@ -1979,6 +2046,8 @@ const Dice = (() => {
       cup.position.set(p0.x + Math.sin(t * 38) * .28 * env, p0.y + Math.abs(Math.sin(t * 38)) * .22 * env, p0.z + Math.cos(t * 31) * .18 * env);
       tq.setFromEuler(new THREE.Euler(Math.sin(t * 31) * .12 * env, 0, Math.sin(t * 38) * .16 * env));
       cup.quaternion.copy(q0).multiply(tq);
+      cupJig = k >= 1 ? 0 : clamp(env * 1.4, 0, 1);
+      cupFollow();
       if (t > next && k < .8) { next = t + .22; if (t > .2 && !silent) Sound.play('rattle', 0, .6); }
       return k >= 1;
     });
@@ -2130,18 +2199,16 @@ const Dice = (() => {
   }
   const upFace = q => { let best = 1, by = -2; for (const v in FACE_N) { const y = tmp2.copy(FACE_N[v]).applyQuaternion(q).y; if (y > by) { by = y; best = +v; } } return {v: best, y: by}; };
 
-  // Räknar fram ett kast för n tärningar från punkten start. Ger {frames: [[x,y,z,qx,qy,qz,qw] × n], hits, up: [värde uppåt]}
-  function simulate(n, start, rnd) {
-    const B = [];
-    for (let k = 0; k < n; k++) {
-      let p, tries = 0;
-      do { p = new THREE.Vector3(start.x + (rnd() - .5) * 1.5, start.y + (rnd() - .5) * .9, start.z + (rnd() - .5) * 1.7); tries++; }
-      while (tries < 40 && B.some(b => b.p.distanceTo(p) < 1.12));
-      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(rnd() * 6.3, rnd() * 6.3, rnd() * 6.3));
-      const v = new THREE.Vector3(-3.2 - rnd() * 3.6, .3 + rnd() * 1.8, (rnd() - .62) * 6.5);
-      const w = new THREE.Vector3((rnd() - .5) * 38, (rnd() - .5) * 26, (rnd() - .5) * 38);
-      B.push(body(p, q, v, w));
-    }
+  // Räknar fram ett kast. starts: [{p, q}] där tärningarna ligger när bägaren släpper dem, dir: öppningens riktning.
+  // Ger {frames: [[x,y,z,qx,qy,qz,qw] × n], hits, up: [värde uppåt]}
+  function simulate(starts, dir, rnd) {
+    const B = starts.map(s0 => {
+      // ut längs bägarens axel (så att de inte går igenom väggen), plus lite spridning
+      const v = dir.clone().multiplyScalar(3.6 + rnd() * 1.8).add(new THREE.Vector3(-1.4 - rnd() * 2.4, 0, (rnd() - .55) * 5));
+      const w = new THREE.Vector3((rnd() - .5) * 30, (rnd() - .5) * 22, (rnd() - .5) * 30);
+      return body(s0.p.clone(), s0.q.clone(), v, w);
+    });
+    const n = B.length;
     const frames = [], hits = [];
     const rec = () => frames.push(B.map(b => [b.p.x, b.p.y, b.p.z, b.q.x, b.q.y, b.q.z, b.q.w]));
     rec();
@@ -2173,7 +2240,12 @@ const Dice = (() => {
     for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) if (Math.hypot(B[i].p.x - B[j].p.x, B[i].p.z - B[j].p.z) < .93) { if (!why.includes('överlapp')) why.push('överlapp'); }
     return {frames, hits, up: ups.map(u => u.v), ok: !why.length, why, t};
   }
-  D._simulate = (n, seed = 1) => simulate(n, new THREE.Vector3(.9, 2.5, -3.3), seeded(seed));
+  // var tärningarna ligger när bägaren släpper dem (i det planerade vända läget)
+  function releaseStarts(list) {
+    return list.map((i, k) => { const d = {i, slot: k, rq: null}; const p = new THREE.Vector3(), q = new THREE.Quaternion(); cupPose(d, p, q, 1, 0, RELEASE_POSE, false); return {p, q}; });
+  }
+  const releaseDir = () => new THREE.Vector3(0, 1, 0).applyQuaternion(RELEASE_POSE.q);
+  D._simulate = (n, seed = 1) => simulate(releaseStarts([0, 1, 2, 3, 4].slice(0, n)), releaseDir(), seeded(seed));
 
   // Vridningen som gör att värdet 'want' visas där sidan 'got' hamnade
   function remap(want, got) {
@@ -2191,27 +2263,28 @@ const Dice = (() => {
       D.place(values, held, true);
       return;
     }
-    // räkna fram kastet (försök igen om någon tärning hamnade på kant eller ovanpå en annan)
-    const start = new THREE.Vector3(.9, 2.5, -3.3);
+    // räkna fram kastet från platserna i den vända bägaren (försök igen om någon tärning hamnade på kant eller ovanpå en annan)
+    const starts = releaseStarts(idx), dir = releaseDir();
     let sim = null;
-    for (let k = 0; k < 10; k++) { const s = simulate(idx.length, start, seeded((Math.random() * 1e9) | 0)); if (!sim || s.ok) sim = s; if (s.ok) break; }
-    const inRow = idx.filter(i => dice[i].zone !== 'cup' && dice[i].g.visible);
+    for (let k = 0; k < 10; k++) { const s1 = simulate(starts, dir, seeded((Math.random() * 1e9) | 0)); if (!sim || s1.ok) sim = s1; if (s1.ok) break; }
+    // platserna i bägaren och bildvridningen (så att rätt värde hamnar uppåt) bestäms nu, innan tärningarna hoppar in
+    idx.forEach((i, k) => { const d = dice[i]; d.slot = k; d.rq = remap(values[i], sim.up[k]); d.v = values[i]; });
+    cupSlide = 0; cupJig = 0;
+    const inRow = idx.filter(i => dice[i].zone !== 'cup');
     // 1) bägaren lyfts över brickan medan tärningarna som ska slås hoppar in i den
+    Bus.emit('dice-phase', 'shake');
     Sound.play('pour');
     const lift = cupTo(CUP_LIFT.p, CUP_LIFT.r, .34);
-    const gather = inRow.length ? flyInto(inRow, .32) : Promise.resolve();
+    const gather = inRow.length ? flyInto(inRow, .36) : Promise.resolve();
     await Promise.all([lift, gather]);
-    // 2) skaka
+    // 2) skaka (tärningarna skramlar i bägaren)
     await shake(.5);
-    // 3) häll: bägaren tippar och tärningarna kommer ut ur öppningen
-    const pourP = new THREE.Vector3(4.75, 3.55, -3.3);
-    const pourR = new THREE.Euler(.08, .2, POUR_ANGLE);
-    const tip = cupTo(pourP, pourR, .26);
-    await wait(185);
+    // 3) vänd bägaren: tärningarna glider mot öppningen och faller ut exakt där kastet börjar
+    await cupSlideTo(CUP_RELEASE.p, CUP_RELEASE.r, .26, 1, t => t * t * (3 - 2 * t));
     const roll = playSim(idx, values, sim);
-    await tip;
     Sound.play('pour');
-    const back = (async () => { await wait(100); await cupTo(CUP_REST.p, CUP_REST.r, .5); })();
+    Bus.emit('dice-phase', 'roll');
+    const back = (async () => { await cupTo(CUP_AFTER.p, CUP_AFTER.r, .12, t => t); await cupTo(CUP_AWAY.p, CUP_AWAY.r, .24); await cupTo(CUP_REST.p, CUP_REST.r, .36); cupSlide = 0; })();
     await roll;
     await back;
     // 4) en kort paus så att man hinner se kastet, sedan in i raden
@@ -2219,22 +2292,28 @@ const Dice = (() => {
     await D.arrange(values, held, {ms: 420, resort: true});
   };
 
-  // tärningarna hoppar in i bägaren
+  // tärningarna hoppar in i bägaren: en båge upp över öppningen och ner till sin plats (de syns hela tiden)
   function flyInto(list, dur) {
-    const from = list.map(i => ({d: dice[i], p: dice[i].g.position.clone(), q: dice[i].g.quaternion.clone()}));
+    const from = list.map((i, j) => ({d: dice[i], p: dice[i].g.position.clone(), q: dice[i].g.quaternion.clone(), j}));
+    if (!cup) { from.forEach(f => { f.d.zone = 'cup'; f.d.flying = false; f.d.g.visible = false; }); return Promise.resolve(); }
+    from.forEach(f => { f.d.flying = true; });
     let t = 0;
+    const tp = new THREE.Vector3(), tq2 = new THREE.Quaternion(), top = new THREE.Vector3();
     return run(dt => {
       t += dt;
-      const k = clamp(t / dur, 0, 1), e = easeInOut(k);
-      const m = mouth().clone();
-      from.forEach((f, j) => {
-        const kk = clamp(k * 1.25 - j * .05, 0, 1), ee = easeInOut(kk);
-        f.d.g.position.lerpVectors(f.p, m, ee);
-        f.d.g.position.y += Math.sin(Math.PI * ee) * 2.2;
-        f.d.g.scale.setScalar(1 - .35 * ee);
-        if (kk >= 1) { f.d.g.visible = false; f.d.zone = 'cup'; }
+      const k = clamp(t / dur, 0, 1);
+      from.forEach(f => {
+        if (!f.d.flying) return;
+        const kk = clamp(k * 1.3 - f.j * .06, 0, 1), e = easeInOut(kk);
+        cupPose(f.d, tp, tq2);
+        top.copy(mouth()).add(new THREE.Vector3(0, 1.4, 0));
+        // kvadratisk bézierkurva: start, ovanför öppningen, platsen i bägaren
+        const a = (1 - e) * (1 - e), b = 2 * (1 - e) * e, c = e * e;
+        f.d.g.position.set(a * f.p.x + b * top.x + c * tp.x, a * f.p.y + b * top.y + c * tp.y, a * f.p.z + b * top.z + c * tp.z);
+        f.d.g.quaternion.copy(f.q).slerp(tq2, e);
+        if (kk >= 1) { f.d.flying = false; f.d.zone = 'cup'; }
       });
-      if (k >= 1) from.forEach(f => { f.d.g.visible = false; f.d.zone = 'cup'; f.d.g.scale.setScalar(1); });
+      if (k >= 1) from.forEach(f => { f.d.flying = false; f.d.zone = 'cup'; });
       return k >= 1;
     });
   }
@@ -2242,11 +2321,11 @@ const Dice = (() => {
   // spelar upp det uträknade kastet för tärningarna idx
   function playSim(idx, values, sim) {
     const n = idx.length;
-    idx.forEach((i, k) => {
+    idx.forEach(i => {
       const d = dice[i];
       d.v = values[i];
-      d.rq = remap(values[i], sim.up[k]);
       d.zone = 'row';
+      d.flying = false;
       d.g.visible = true;
       d.g.scale.setScalar(1);
     });
@@ -2278,8 +2357,12 @@ const Dice = (() => {
     const vis = dice.filter(d => d.g.visible && d.zone !== 'cup').map(d => d.i);
     if (!vis.length) return;
     if (reduceMotion || Time.scale === 0) { D.hide(); return; }
+    // alla fem får en plats i bägaren (de som redan ligger där behåller sin)
+    const used = new Set(dice.filter(d => d.zone === 'cup').map(d => d.slot));
+    vis.forEach(i => { let s1 = 0; while (used.has(s1)) s1++; dice[i].slot = s1; used.add(s1); });
+    cupSlide = 0; cupJig = 0;
     Sound.play('sweep');
-    await flyInto(vis, .45);
+    await flyInto(vis, .5);
   };
 
   /* ---------- Tryck ---------- */
@@ -2301,7 +2384,7 @@ const Dice = (() => {
     return Math.hypot(p.x - x, p.y - y) < Math.max(40, size * 2.4);
   };
   // skärmläget för varje tärning (för tester och etiketter)
-  D.screen = () => dice.map(d => { const p = Scene.project(d.g.position); return {i: d.i, x: p.x, y: p.y, zone: d.zone, v: d.v, visible: d.g.visible}; });
+  D.screen = () => dice.map(d => { const p = Scene.project(d.g.position); return {i: d.i, x: p.x, y: p.y, zone: d.zone, v: d.v, visible: d.g.visible && d.zone !== 'cup'}; });
 
   // Tipset: blå pulserande ringar under tärningarna som bör sparas (null tar bort)
   D.tip = hold => {
@@ -2570,7 +2653,7 @@ const Table = (() => {
   const T = {};
   let V = null, ctl = false, me = -1, hotseat = false, watch = false;
   let hold = [false, false, false, false, false];
-  let sel = null, tip = null, busy = false, fresh = null, turnKey = '';
+  let sel = null, tip = null, busy = false, fresh = null, turnKey = '', rollPhase = '';
   let hudEl, barEl, hintEl, blockEl, stageEl, viewEl;
   let handlers = {};
 
@@ -2595,6 +2678,7 @@ const Table = (() => {
       ro.observe(viewEl); ro.observe(blockEl);
     }
     Bus.on('scene-resize', () => updateHint());
+    Bus.on('dice-phase', ph => { rollPhase = ph; if (busy) renderBar(); });
     Bus.on('frame', () => { if (hintEl && hintEl.dataset.follow) updateHint(); });
     T.layout();
   };
@@ -2678,7 +2762,7 @@ const Table = (() => {
       return;
     }
     if (busy && ctl && !watch) {
-      barEl.append(h('div', {class: 'status wide'}, h('b', {}, lock === 'write' ? 'Skriver in' : V.rolls ? 'Tärningarna rullar' : 'Bägaren skakas', h('span', {class: 'think'}, h('i'), h('i'), h('i')))));
+      barEl.append(h('div', {class: 'status wide'}, h('b', {}, lock === 'write' ? 'Skriver in' : rollPhase === 'roll' ? 'Tärningarna rullar' : 'Bägaren skakas', h('span', {class: 'think'}, h('i'), h('i'), h('i')))));
       return;
     }
     if (!T.canAct()) {
