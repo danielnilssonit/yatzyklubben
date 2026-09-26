@@ -1,0 +1,30 @@
+{
+  "name": "Yatzyklubben",
+  "short_name": "Yatzy",
+  "description": "Klassisk skandinavisk yatzy med riktiga 3D-tärningar. Spela själv, mot datorn, flera vid samma skärm eller med släkten över internet.",
+  "lang": "sv",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b3a26",
+  "theme_color": "#0b3a26",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
