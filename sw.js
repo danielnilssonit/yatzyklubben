@@ -1,5 +1,5 @@
 // Yatzyklubben: sparar spelet i webbläsaren så att det startar även utan internet
-const CACHE = 'yatzy-0ed9c789fe';
+const CACHE = 'yatzy-baed3bc3f5';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png', './favicon-32.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(async c => {
